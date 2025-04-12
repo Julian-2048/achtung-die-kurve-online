@@ -1,6 +1,8 @@
 # Achtung, die Kurve!
 
-Network, modified version of Achtung, die Kurve! by Eigil Nikolajsen hosted on: [https://achtung.life](https://achtung.life)
+Network, modified version of Achtung, die Kurve! by Eigil Nikolajsen
+
+The original is hosted on: [https://achtung.life](https://achtung.life)
 
 **run:** node index.js
 
