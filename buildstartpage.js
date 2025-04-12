@@ -1,5 +1,6 @@
 const gameID = document.querySelector("#game")
 const startPage = document.querySelector("#start_page")
+
 function buildStartPage() {
     const startH1 = document.createElement("h1")
     startH1.id = "game_title"
@@ -11,15 +12,16 @@ function buildStartPage() {
 
     const firstRow = document.createElement("section")
     firstRow.classList.add("player_wrapper_start")
-    Array.from(Array(4)).forEach((_, i) => {
+    Array.from(Array(5)).forEach((_, i) => {
         const p = document.createElement("p")
         if (i == 0) p.textContent = "#"
-        if (i == 1) p.textContent = "Player"
-        if (i == 2) {
+        if (i == 1) p.textContent = "DEL"
+        if (i == 2) p.textContent = "Player"
+        if (i == 3) {
             p.textContent = "Left"
             p.classList.add("text_center")
         }
-        if (i == 3) {
+        if (i == 4) {
             p.textContent = "Right"
             p.classList.add("text_center")
         }
@@ -37,6 +39,15 @@ function buildStartPage() {
         playerCounter++
         pNum.textContent = playerCounter
         pWrap.append(pNum)
+        const pDel = document.createElement("p")
+        pDel.textContent="DEL"
+        pDel.classList.add("del")
+        pDel.addEventListener("click", function(e){
+          if(players[player].active)playerClick(player)
+          sendRemovePlayer(player)
+          e.stopPropagation()
+        })
+        pWrap.append(pDel)
         const pName = document.createElement("p")
         pName.textContent = player.charAt(0).toUpperCase() + player.slice(1)
         pWrap.append(pName)

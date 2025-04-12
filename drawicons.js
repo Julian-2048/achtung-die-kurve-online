@@ -58,6 +58,8 @@ const drawPowerupIcons = (icon) => {
     )
     let pathThick = new Path2D("M806.8,190l-104.6-55.2C476.2,318,325.5,565.2,273.1,890l104.6,55.2C606.2,765,750.2,514.1,806.8,190 L806.8,190z")
     let pathThin = new Path2D("M377.8,945.1C475.6,686.6,615.1,433.9,806.8,190l-104.6-55.1C602,392.1,462,644,273.1,890L377.8,945.1z")
+    let pathDie1 = new Path2D("M140,860L220,940L940,220L860,140L140,860z")
+    let pathDie2 = new Path2D("M220,140L140,220L860,940L940,860L220,140z")
 
     let iconPaths = {
         clear: [pathClear],
@@ -85,9 +87,10 @@ const drawPowerupIcons = (icon) => {
         slow: [pathSlow1, pathSlow2, pathSlow3],
         thick: [pathThick],
         thin: [pathThin],
+        die: [pathDie1, pathDie2],
     }
 
-    let scaleFac = 1080 / iconSize
+    let scaleFac = 1080 / iconSizePx
 
     for (const path in iconPaths) {
         if (!(path == icon)) {
@@ -95,7 +98,7 @@ const drawPowerupIcons = (icon) => {
         } else {
             for (let i = 0; i < iconPaths[icon].length; i++) {
                 ctxPV.save()
-                ctxPV.translate(-iconSize, -iconSize)
+                ctxPV.translate(-iconSizePx, -iconSizePx)
                 ctxPV.scale(2 / scaleFac, 2 / scaleFac)
                 ctxPV.fillStyle = yellow
                 if (path == "invisible" && i == 0) ctxPV.fillStyle = "#000000"

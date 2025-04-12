@@ -1,3 +1,20 @@
+function multProb(prob, mult){
+  //multiplies probability
+  return 1-Math.pow(1-prob, mult);
+}
+
+function rotatePoint(point, origin, angle) {
+  let cos=Math.cos(angle), sin=Math.sin(angle);
+  return [
+    cos * ( point[0] - origin[0] ) - sin * ( point[1] - origin[1] ) + origin[0],
+    sin * ( point[0] - origin[0] ) + cos * ( point[1] - origin[1] ) + origin[1]
+  ];
+}
+
+function rectPointCollide(rX, rY, w, h, pX, pY){
+  return pX>rX && pX<rX+w && pY>rY && pY<rY+h;
+}
+
 // players
 let players = {
     fred: { powerup: { toClear: [] }, score: 0, ready: false },
@@ -8,26 +25,24 @@ let players = {
     greydon: { powerup: { toClear: [] }, score: 0, ready: false },
 }
 
+let playerList=["fred","greenlee","pinkney","bluebell","willem","greydon"]
+
 let achtung = {
-    gamemode: 1, //  0 = arcade, 1 = classic
     startScreen: true, // are we on the start screen?
     gameRunning: false, // are we playing?
     gameEnded: true, // are noone alive?
     winner: false, // do we have a winner?
-    sides: 0, // can all players go out of screen and come out the other side
-    clearSides: 0, // to clear timeone if leftover time from last round
     playing: [], // who's playing
     powerups: [
         "g_slow",
         "g_fast",
         "g_thin",
-        "g_robot",
         "g_side",
         "g_invisible",
+        "g_die",
         "r_slow",
         "r_fast",
         "r_thick",
-        "r_robot",
         "r_reverse",
         "b_clear",
         "b_more",
@@ -43,12 +58,10 @@ let canvasID,
     dotsCanvas = document.querySelector("#dots_canvas"), // canvas for player dots
     trailsHitboxCanvas = document.querySelector("#trails_hitbox_canvas"), // canvas for player trails
     powerupVisualCanvas = document.querySelector("#powerup_visual_canvas"), // canvas for powerup icons
-    powerupHitboxCanvas = document.querySelector("#powerup_hitbox_canvas"), // canvas for powerup hitboxes
     ctxUI = UIcanvas.getContext("2d"),
     ctxDO = dotsCanvas.getContext("2d"),
-    ctxTH = trailsHitboxCanvas.getContext("2d"),
+    ctxTH = trailsHitboxCanvas.getContext("2d", { willReadFrequently: true }),
     ctxPV = powerupVisualCanvas.getContext("2d"),
-    ctxPH = powerupHitboxCanvas.getContext("2d"),
     yellow = getComputedStyle(document.documentElement).getPropertyValue(`--yellow`), // colors
     green = getComputedStyle(document.documentElement).getPropertyValue(`--greenlee`),
     greent = getComputedStyle(document.documentElement).getPropertyValue(`--greenlee-t`),
@@ -56,20 +69,14 @@ let canvasID,
     redt = getComputedStyle(document.documentElement).getPropertyValue(`--fred-t`),
     blue = getComputedStyle(document.documentElement).getPropertyValue(`--blue`),
     bluet = getComputedStyle(document.documentElement).getPropertyValue(`--blue-t`),
-    tFrame = 0, // cur frame in draw
-    powerupProb = 0.005, // in percent
-    bridgeProb = 0.005, // in percent
-    bridgeSize = 10, // in frames
-    turnSpeed = 0.06, // in radians per frame
     w,
     h,
     w100th,
     h100th,
-    moveSpeed,
-    playerSize,
-    hitboxSize,
     borderWidth,
-    iconSize // to be set in newSize()
+    iconSizePx, // to be set in newSize()
+    borderOpacity=1,
+    lastFrame=-1
 
 // when resizing
 window.addEventListener("resize", newSize)
@@ -77,8 +84,8 @@ window.addEventListener("resize", newSize)
 function newSize() {
     // update canvas sizes and variable sizes to fit new size
     const dpr = Math.min(window.devicePixelRatio, 2)
-    w = Math.round(UIcanvas.getBoundingClientRect().width * dpr)
-    h = Math.round(UIcanvas.getBoundingClientRect().height * dpr)
+    w = Math.round(UIcanvas.getBoundingClientRect().width * dpr * 0.5)
+    h = Math.round(UIcanvas.getBoundingClientRect().height * dpr * 0.5)
     UIcanvas.width = w
     UIcanvas.height = h
     dotsCanvas.width = w
@@ -87,30 +94,23 @@ function newSize() {
     trailsHitboxCanvas.height = h
     powerupVisualCanvas.width = w
     powerupVisualCanvas.height = h
-    powerupHitboxCanvas.width = w
-    powerupHitboxCanvas.height = h
     w100th = w / 100 // 1 percent of canvas width
     h100th = h / 100 // 1 percent of canvas height
-    moveSpeed = w100th * 0.18 // in pixels per frame
-    playerSize = w100th * 0.7 // in pixels
-    hitboxSize = playerSize / 1.8 // in pixels
-    borderWidth = w100th / 2 // in pixels
-    iconSize = w100th * 2 // in pixels
-
-    init() // restart
+    borderWidth = 0.005*w/h // in part of field height
+    iconSizePx = 0.02*w // in pixels
+    drawGameUI()
+    powerupDraw()
+    //init() // restart
 }
 
 function init() {
+    lastFrame=-1 // -1 so tFrame=0 > lastFrame
+    borderOpacity=1
     achtung.powerupsOnScreen = [] // clear powerups on screen
     clearTimeout(achtung.clearSides) // clear timeout if sides powerup leftover time from last round
     achtung.sides = 0 // reset sides
 
     for (const player in players) {
-        // clear timeout if powerup leftover time from last round
-        for (let i = 0; i < players[player].powerup.toClear.length; i++) {
-            clearTimeout(players[player].powerup.toClear[i])
-        }
-
         // reset players object to default values before starting a new round
         players[player].x = 0
         players[player].y = 0
@@ -120,46 +120,41 @@ function init() {
         players[player].color = getComputedStyle(document.documentElement).getPropertyValue(`--${player}`) // colors from css :root object
         players[player].alive = true
         players[player].winner = false
-        players[player].bridge = false
-        players[player].bridgeFrame = 0
-        players[player].powerup = {} // contains powerup values
-        players[player].powerup.size = 1
-        players[player].powerup.robot = 0
-        players[player].powerup.reverse = 0
-        players[player].powerup.speed = 1
-        players[player].powerup.invisible = 0
-        players[player].powerup.side = 0
-        players[player].powerup.powerupArray = []
-        players[player].powerup.toClear = [] // to clear timeout at the end of rounds if leftover time
     }
 
     // clear everything
     ctxTH.clearRect(0, 0, w, h)
     ctxUI.clearRect(0, 0, w, h)
     ctxDO.clearRect(0, 0, w, h)
-    ctxPH.clearRect(0, 0, w, h)
     ctxPV.clearRect(0, 0, w, h)
 
     // draw yellow border
-    ctxDO.lineWidth = borderWidth
+    ctxDO.lineWidth = borderWidth*h
     ctxDO.strokeStyle = yellow
-    ctxDO.strokeRect(borderWidth / 2, borderWidth / 2, h - borderWidth, h - borderWidth)
+    ctxDO.strokeRect(borderWidth*h / 2, borderWidth*h / 2, h - borderWidth*h, h - borderWidth*h)
 
-    calcRandomStartPos() // calc random start positions
-    calcRandomStartDir() // calc random start directions
     drawGameUI() // draw ui
-    drawStart() // draw players at start so they can see where they're going
+}
+
+function readyPlayersAndScore(view, viewIndex){
+  for(let player of playerList){
+    players[player].ready=view.getUint8(viewIndex++) ? true : false
+    players[player].score=view.getInt32(viewIndex);viewIndex+=4
+  }
+  drawGameUI()
 }
 
 document.addEventListener("keydown", (e) => {
     // update players turning to true if turning
+    let playerIndex
     for (const player in players) {
         if (!players[player].alive) continue // if player not alive; skip
+        playerIndex=playerList.indexOf(player)
         if (e.code == players[player].keyL) {
-            players[player].turnL = true
+            ws.send(new Uint8Array([0,playerIndex,1,1]))
         }
         if (e.code == players[player].keyR) {
-            players[player].turnR = true
+            ws.send(new Uint8Array([0,playerIndex, 2,1]))
         }
     }
 
@@ -175,42 +170,63 @@ document.addEventListener("keydown", (e) => {
         }
         init()
     }
+    if (e.code == "Space") pressSpace()
 })
 document.addEventListener("keyup", (e) => {
     // update players turning to false when keyup
+    let playerIndex
     for (const player in players) {
         if (!players[player].alive) continue // if player not alive; skip
+        playerIndex=playerList.indexOf(player)
         if (e.code == players[player].keyL) {
-            players[player].turnL = false
+            ws.send(new Uint8Array([0,playerIndex,1,0]))
         }
         if (e.code == players[player].keyR) {
-            players[player].turnR = false
+            ws.send(new Uint8Array([0,playerIndex,2,0]))
         }
     }
 })
-document.addEventListener("keypress", (e) => {
-    if (e.code == "Space") {
-        pressSpace()
-    }
-})
+
+//makes player ready and sends add player msg to server
+function sendAddPlayer(player){
+  players[player].ready=true
+  ws.send(new Uint8Array([1,playerList.indexOf(player)]) )
+}
+
+//makes player not ready and sends remove player msg to server
+function sendRemovePlayer(player){
+  players[player].ready=false
+  ws.send(new Uint8Array([2,playerList.indexOf(player)]) )
+}
+
+function addPlayer(view, viewIndex){
+  players[playerList[view.getUint8(viewIndex++)] ].ready=true
+}
+
+function removePlayer(view, viewIndex){
+  players[playerList[view.getUint8(viewIndex++)] ].ready=false
+}
 
 function pressSpace() {
     let playingC = 0
     for (const player in players) {
         if (players[player].ready) playingC++
     }
-
+    
+    let shouldSendSpace=true
     if (achtung.startScreen) {
-        if (playingC >= 2) {
+        if (playingC >= 0) {
             // start game
             for (const player in players) {
                 if (players[player].active && !players[player].ready) {
                     resetPlayer(document.querySelector(`.player_wrapper.${player}`))
                 }
+                if(players[player].ready) sendAddPlayer(player)
             }
             achtung.startScreen = false
             achtung.gameEnded = true
             startPage.style.display = "none"
+            shouldSendSpace=false
             init()
         }
     }
@@ -219,11 +235,9 @@ function pressSpace() {
         if (!achtung.gameRunning) {
             // resume game
             achtung.gameRunning = true
-            window.requestAnimationFrame(draw)
         } else {
             // pause game
             achtung.gameRunning = false
-            window.cancelAnimationFrame(canvasID)
         }
     } else {
         // restart game
@@ -239,337 +253,110 @@ function pressSpace() {
             }
             init()
         } else {
-            if (playingC >= 2) {
+            if (playingC >= 1) {
                 achtung.gameEnded = false
                 achtung.gameRunning = false
                 init()
             }
         }
     }
-}
-
-// draw start position so players know where they're going
-function drawStart() {
-    for (const player in players) {
-        if (!players[player].ready) continue
-
-        // draw player dot
-        ctxDO.fillStyle = yellow
-        ctxDO.beginPath()
-        ctxDO.arc(players[player].x, players[player].y, (playerSize / 2 - 0.1) * players[player].powerup.size, 0, r2d(360), true)
-        ctxDO.fill()
-
-        // draw player trail
-        ctxTH.fillStyle = players[player].color
-        ctxTH.save()
-        ctxTH.translate(players[player].x, players[player].y)
-        ctxTH.rotate(players[player].dir - r2d(270))
-        ctxTH.fillRect(
-            (-playerSize / 2) * players[player].powerup.size,
-            0,
-            playerSize * players[player].powerup.size,
-            playerSize * 2 * players[player].powerup.size
-        )
-        ctxTH.restore()
+    function sendSpace(){
+      ws.send(new Uint8Array([0,0,0,1]) )
     }
+    if(shouldSendSpace)sendSpace()
 }
 
-// main loop
-function draw() {
-    canvasID = window.requestAnimationFrame(draw) // to pause: cancelAnimationFrame(CanvasID)
-    tFrame++ // increment tFrame
+function drawPlayerDot(opacity, blueDot, size, x, y){
+  ctxDO.fillStyle= ( blueDot ? "rgba(0,0,255," : "rgba(255,255,0," ) + opacity + ")"
+  ctxDO.beginPath()
+  ctxDO.arc(x * h, y * h, size * 0.5 * h, 0, d2r(360), true)
+  ctxDO.fill()
+}
 
+function drawTrace(player, size, fromX, fromY, toX, toY){
+  ctxTH.strokeStyle = players[player].color
+  ctxTH.lineWidth = size*h
+  ctxTH.beginPath()
+  ctxTH.lineCap = "butt"
+  ctxTH.moveTo(fromX*h, fromY*h)
+  ctxTH.lineTo(toX*h, toY*h)
+  ctxTH.stroke()
+}
+
+function drawPlayers(view, viewIndex) {
     // clear
+    let tFrame=view.getUint32(viewIndex);viewIndex+=4
+    let shouldDrawDot=false
+    if(tFrame>lastFrame){
+      lastFrame=tFrame
+      shouldDrawDot=true
+    }
     ctxTH.clearRect(h, 0, w - h, h)
     ctxDO.clearRect(0, 0, w, h)
     ctxDO.fillStyle = "#000000"
     ctxDO.fillRect(h, 0, w - h, h)
-
+    borderOpacity=view.getUint8(viewIndex++)/255
     // draw yellow border
-    ctxDO.lineWidth = borderWidth
+    ctxDO.lineWidth = borderWidth*h
     ctxDO.strokeStyle = "#000000"
-    ctxDO.strokeRect(borderWidth / 2, borderWidth / 2, h - borderWidth, h - borderWidth)
-    if (achtung.sides != 0) ctxDO.strokeStyle = `rgba(255, 255, 0, ${Math.abs((tFrame % 40) - 20) / 20})`
-    else ctxDO.strokeStyle = yellow // if sides, border flickers
-    ctxDO.strokeRect(borderWidth / 2, borderWidth / 2, h - borderWidth, h - borderWidth)
-
-    // spawn new powerup if arcade mode and math.random() < powerup probability
-    if (achtung.gamemode == 1) if (Math.random() < powerupProb) powerupSpawner()
-
-    // loop through players and draw them
-    for (const player in players) {
-        if (!players[player].ready) continue // continue loop if player not playing
-
-        // player pos
-        let prevprevPosX = players[player].x - mathCos(players[player].dir) * moveSpeed * players[player].powerup.speed,
-            prevprevPosY = players[player].y - mathSin(players[player].dir) * moveSpeed * players[player].powerup.speed,
-            prevPosX = players[player].x,
-            prevPosY = players[player].y,
-            nextPosX = players[player].x + mathCos(players[player].dir) * moveSpeed * players[player].powerup.speed,
-            nextPosY = players[player].y + mathSin(players[player].dir) * moveSpeed * players[player].powerup.speed
-
-        // draw player dot
-        if (players[player].powerup.reverse == 0) {
-            if (players[player].powerup.side == 0) {
-                ctxDO.fillStyle = yellow
-            } else ctxDO.fillStyle = `rgba(255, 255, 0, ${Math.abs((tFrame % 40) - 20) / 20})` // flicker dot if side powerup
-        } else {
-            if (players[player].powerup.side == 0) {
-                ctxDO.fillStyle = blue
-            } else ctxDO.fillStyle = `rgba(0, 0, 255, ${Math.abs((tFrame % 40) - 20) / 20})` // flicker dot if side powerup
-        }
-        if (players[player].powerup.robot == 0) {
-            // draw dot if normal
-            ctxDO.beginPath()
-            ctxDO.arc(nextPosX, nextPosY, (playerSize / 2) * players[player].powerup.size, 0, r2d(360), true)
-            ctxDO.fill()
-        } else {
-            // draw square if robot
-            ctxDO.save()
-            ctxDO.translate(nextPosX, nextPosY)
-            ctxDO.rotate(players[player].dir - r2d(270))
-            ctxDO.fillRect(
-                (-playerSize / 2) * players[player].powerup.size,
-                (-playerSize / 2) * players[player].powerup.size,
-                playerSize * players[player].powerup.size,
-                playerSize * players[player].powerup.size
-            )
-            ctxDO.restore()
-        }
-
-        if (!players[player].alive) continue // continue if player not alive (drawing dot is above, so player dot will still be drawn even if dead)
-
-        // update player turning
-        if (players[player].powerup.robot == 0) {
-            // if normal
-            if (players[player].turnL) {
-                if (players[player].powerup.reverse == 0) players[player].dir -= turnSpeed / Math.pow(players[player].powerup.size, 0.3)
-                else players[player].dir += turnSpeed / Math.pow(players[player].powerup.size, 0.3)
-            }
-            if (players[player].turnR) {
-                if (players[player].powerup.reverse == 0) players[player].dir += turnSpeed / Math.pow(players[player].powerup.size, 0.3)
-                else players[player].dir -= turnSpeed / Math.pow(players[player].powerup.size, 0.3)
-            }
-        } else {
-            // if robot
-            if (players[player].turnL) {
-                players[player].turnL = false
-                if (players[player].powerup.reverse == 0) players[player].dir -= r2d(90)
-                else players[player].dir += r2d(90)
-            }
-            if (players[player].turnR) {
-                players[player].turnR = false
-                if (players[player].powerup.reverse == 0) players[player].dir += r2d(90)
-                else players[player].dir -= r2d(90)
-            }
-        }
-
-        // update player position
-        prevPosX = players[player].x
-        prevPosY = players[player].y
-        players[player].x = nextPosX
-        players[player].y = nextPosY
-
-        // check for player inside playing field
-        if (achtung.sides != 0 || players[player].powerup.side != 0) {
-            // player has side powerup of achtung.sides, players can move out of canvas
-            if (players[player].x < 0) {
-                players[player].x = h
-                prevPosX = h
-                prevprevPosX = h
-            }
-            if (players[player].x > h) {
-                players[player].x = 0
-                prevPosX = 0
-                prevprevPosX = 0
-            }
-            if (players[player].y < 0) {
-                players[player].y = h
-                prevPosY = h
-                prevprevPosY = h
-            }
-            if (players[player].y > h) {
-                players[player].y = 0
-                prevPosY = 0
-                prevprevPosY = 0
-            }
-        } else {
-            if (
-                // if not, player dead
-                players[player].x < borderWidth + hitboxSize ||
-                players[player].x > h - borderWidth - hitboxSize ||
-                players[player].y < borderWidth + hitboxSize ||
-                players[player].y > h - borderWidth - hitboxSize
-            ) {
-                givePoints(players[player])
-                continue
-            }
-        }
-
-        // insert bridge
-        if (!players[player].bridge) {
-            // if not already bridge
-            if (Math.random() < bridgeProb) {
-                // if math.random() less than prob for bridge
-                players[player].bridge = true
-            }
-            players[player].bridgeFrame = tFrame // what frame did bridge start
-        }
-        if (players[player].bridgeFrame < tFrame - (bridgeSize / players[player].powerup.speed) * players[player].powerup.size) {
-            // stop bridge when bridgeSize frame has passed
-            players[player].bridge = false
-        }
-
-        // draw player trail; don't draw if bridge or invisible
-        if (!players[player].bridge && players[player].powerup.invisible == 0) {
-            ctxTH.strokeStyle = players[player].color
-            ctxTH.lineWidth = playerSize * players[player].powerup.size
-            ctxTH.beginPath()
-            if (players[player].powerup.robot != 0) {
-                ctxTH.lineCap = "round"
-                ctxTH.moveTo(prevPosX, prevPosY)
-            } else {
-                ctxTH.lineCap = "butt"
-                ctxTH.moveTo(prevprevPosX, prevprevPosY)
-            }
-            ctxTH.lineTo(players[player].x, players[player].y)
-            ctxTH.stroke()
-        }
-
-        // check collision
-        const pxFront = Math.round(players[player].x + mathCos(players[player].dir) * hitboxSize * players[player].powerup.size)
-        const pyFront = Math.round(players[player].y + mathSin(players[player].dir) * hitboxSize * players[player].powerup.size)
-        const pxFront2 = Math.round(players[player].x + mathCos(players[player].dir))
-        const pyFront2 = Math.round(players[player].y + mathSin(players[player].dir))
-        const pxLeft = Math.round(players[player].x + mathCos(players[player].dir - r2d(55)) * hitboxSize * players[player].powerup.size)
-        const pyLeft = Math.round(players[player].y + mathSin(players[player].dir - r2d(55)) * hitboxSize * players[player].powerup.size)
-        const pxRight = Math.round(players[player].x + mathCos(players[player].dir + r2d(55)) * hitboxSize * players[player].powerup.size)
-        const pyRight = Math.round(players[player].y + mathSin(players[player].dir + r2d(55)) * hitboxSize * players[player].powerup.size)
-
-        const imgDataFrontTH = ctxTH.getImageData(pxFront, pyFront, 1, 1).data
-        const imgDataFrontPH = ctxPH.getImageData(pxFront, pyFront, 1, 1).data
-        const imgDataFront2TH = ctxTH.getImageData(pxFront2, pyFront2, 1, 1).data
-        const imgDataFront2PH = ctxPH.getImageData(pxFront2, pyFront2, 1, 1).data
-        const imgDataLeftTH = ctxTH.getImageData(pxLeft, pyLeft, 1, 1).data
-        const imgDataLeftPH = ctxPH.getImageData(pxLeft, pyLeft, 1, 1).data
-        const imgDataRightTH = ctxTH.getImageData(pxRight, pyRight, 1, 1).data
-        const imgDataRightPH = ctxPH.getImageData(pxRight, pyRight, 1, 1).data
-
-        // uncomment to visualize hitbox
-        // ctxDO.fillStyle = "#ffffff"
-        // ctxDO.fillRect(pxFront, pyFront, 1, 1)
-        // ctxDO.fillRect(pxFront2, pyFront2, 1, 1)
-        // ctxDO.fillRect(pxLeft, pyLeft, 1, 1)
-        // ctxDO.fillRect(pxRight, pyRight, 1, 1)
-
-        // check collision for every powerup on screen
-        for (let i = 0; i < achtung.powerupsOnScreen.length; i++) {
-            if (
-                (imgDataFrontPH[2] == i * 3 + 1 && imgDataFrontPH[1] == i * 3 + 2 && imgDataFrontPH[0] == i * 3 + 3) ||
-                (imgDataLeftPH[2] == i * 3 + 1 && imgDataLeftPH[1] == i * 3 + 2 && imgDataLeftPH[0] == i * 3 + 3) ||
-                (imgDataRightPH[2] == i * 3 + 1 && imgDataRightPH[1] == i * 3 + 2 && imgDataRightPH[0] == i * 3 + 3)
-            ) {
-                let powName = achtung.powerupsOnScreen[i].pow
-                players[player].powerup.powerupArray.push(powName)
-
-                // remove powerup from screen
-                achtung.powerupsOnScreen.splice(i, 1)
-
-                // do powerup
-                doPowerups(player, players[player].powerup.powerupArray.length - 1)
-
-                // draw powerup
-                powerupDraw()
-            }
-        }
-
-        if (!players[player].bridge) {
-            // don't check collision if making bridge
-            if (players[player].powerup.invisible == 0) {
-                // don't check if invisible
-                if (players[player].powerup.robot == 0) {
-                    // check alpha value of pixels front, front2, left, right
-                    if (imgDataFrontTH[3] == 255 || imgDataFront2TH[3] == 255 || imgDataLeftTH[3] == 255 || imgDataRightTH[3] == 255) {
-                        givePoints(players[player])
-                        continue
-                    }
-                } else {
-                    if (imgDataFrontTH[3] == 255) {
-                        // if robot only check alpha value of front
-                        givePoints(players[player])
-                        continue
-                    }
-                }
-            }
-        }
+    ctxDO.strokeRect(borderWidth*h / 2, borderWidth*h / 2, h - borderWidth*h, h - borderWidth*h)
+    ctxDO.strokeStyle = "rgba(255,255,0,"+borderOpacity+")"
+    ctxDO.strokeRect(borderWidth*h / 2, borderWidth*h / 2, h - borderWidth*h, h - borderWidth*h)
+    let nOfPlayers=(view.byteLength-viewIndex)/44
+    for(let i=0;i<nOfPlayers;++i){
+      let player=playerList[view.getUint8(viewIndex++)]
+      let dotOpacity=view.getUint8(viewIndex++) / 255
+      let blueDot=view.getUint8(viewIndex++)
+      let size=view.getFloat64(viewIndex);viewIndex+=8
+      let toX=view.getFloat64(viewIndex);viewIndex+=8
+      let toY=view.getFloat64(viewIndex);viewIndex+=8
+      // draw dot
+      if(shouldDrawDot)drawPlayerDot(dotOpacity, blueDot, size, toX, toY)
+      let trace=view.getUint8(viewIndex++)
+      if(trace){
+        let fromX=view.getFloat64(viewIndex)
+        let fromY=view.getFloat64(viewIndex+8)
+        drawTrace(player, size, fromX, fromY, toX, toY)
+      }
+      viewIndex+=16
     }
-
-    // drawGameUI()
-    checkGameState()
 }
 
-// check game stats
-function checkGameState() {
-    // how many are alive?
-    let alive = 0
-    for (const player in players) {
-        if (players[player].alive && players[player].ready) {
-            alive++
-        }
-    }
+function clearTraces(view, viewIndex){
+  ctxTH.clearRect(0, 0, w, h)
+}
 
-    // if all dead
-    if (alive <= 1) {
-        // IMPORTANT - change back to 1 -------------------------------------------------------------------------------------------------------------------------------
-        window.cancelAnimationFrame(canvasID)
-        achtung.gameEnded = true
-    }
+function removePowup(view, viewIndex){
+  achtung.powerupsOnScreen.splice(view.getUint8(viewIndex++), 1)
+  powerupDraw()
+}
 
-    // did someone win?
-    if (achtung.gameEnded) {
-        if (achtung.scoreArray[achtung.scoreArray.length - 1][1] >= achtung.pointGoal) {
-            if (achtung.scoreArray[achtung.scoreArray.length - 1][1] - achtung.scoreArray[achtung.scoreArray.length - 2][1] > 1) {
-                let p = achtung.scoreArray[achtung.scoreArray.length - 1][0]
-                // console.log(p + " wins the game")
-                achtung.winner = true
+function displayWinner(view, viewIndex){
+  let player=playerList[view.getUint8(viewIndex++)]
+  ctxUI.fillStyle = players[player].color.replace("rgb", "rgba").replace(")", ", 0.3)")
+  ctxUI.fillRect(20 * h100th, 32 * h100th, h - 40 * h100th, h - 64 * h100th)
 
-                // draw winner screen
-                for (const player in players) {
-                    if (player == p) {
-                        ctxUI.fillStyle = players[player].color.replace("rgb", "rgba").replace(")", ", 0.3)")
-                        ctxUI.fillRect(20 * h100th, 32 * h100th, h - 40 * h100th, h - 64 * h100th)
+  ctxUI.lineWidth = borderWidth*h
+  ctxUI.strokeStyle = players[player].color
+  ctxUI.strokeRect(20 * h100th, 32 * h100th, h - 40 * h100th, h - 64 * h100th)
 
-                        ctxUI.lineWidth = borderWidth
-                        ctxUI.strokeStyle = players[player].color
-                        ctxUI.strokeRect(20 * h100th, 32 * h100th, h - 40 * h100th, h - 64 * h100th)
-
-                        ctxUI.textBaseline = "middle"
-                        ctxUI.fillStyle = players[player].color
-                        ctxUI.textAlign = "center"
-                        ctxUI.font = `${w100th * 6}px 'Sarabun'`
-                        ctxUI.fillText("Konec hry", h / 2, h / 2 - h100th * 5) // the legendary "konec hry"
-                        ctxUI.font = `${w100th * 4}px 'Sarabun'`
-                        ctxUI.fillText(`${capitalize(player)} wins!`, h / 2, h / 2 + h100th * 5)
-                    }
-                }
-            } else {
-                // two players are within 1 point; continue playing
-                // console.log("play on")
-            }
-        }
-    }
+  ctxUI.textBaseline = "middle"
+  ctxUI.fillStyle = players[player].color
+  ctxUI.textAlign = "center"
+  ctxUI.font = `${w100th * 6}px 'Sarabun'`
+  ctxUI.fillText("Konec hry", h / 2, h / 2 - h100th * 5) // the legendary "konec hry"
+  ctxUI.font = `${w100th * 4}px 'Sarabun'`
+  ctxUI.fillText(`${capitalize(player)} wins!`, h / 2, h / 2 + h100th * 5)
 }
 
 // updates points for players
-function givePoints(p) {
-    p.alive = false
-    for (const player in players) {
-        if (!players[player].ready) continue
-        if (p != players[player] && players[player].alive) {
-            players[player].score++
-            drawGameUI()
-        }
-    }
+// kills given player and updates points for others
+function updateScore(view, viewIndex) {
+  //updateScore
+  for(let player of playerList){
+    players[player].score=view.getInt32(viewIndex);viewIndex+=4
+  }
+  drawGameUI()
 }
 
 // draws game ui
@@ -588,7 +375,7 @@ const drawGameUI = () => {
     achtung.scoreArray.sort((a, b) => a[1] - b[1])
 
     // draw top text
-    achtung.pointGoal = (achtung.scoreArray.length - 1) * 10 // // // // // // // change back to * 10 -------------------------------------------------------------------------------------
+    achtung.pointGoal = Math.max(achtung.scoreArray.length - 1, 1) * 10 // // // // // // // change back to * 10 -------------------------------------------------------------------------------------
     let UIcenter = +h + (w - h) / 2
     ctxUI.fillStyle = "#FFFFFF"
     ctxUI.textAlign = "center"
@@ -620,140 +407,35 @@ const drawGameUI = () => {
     ctxUI.font = `${w100th * 2}px 'Sarabun'`
     ctxUI.fillText("SPACE to play", UIcenter, +h - w100th * 6)
     ctxUI.fillText("ESCAPE to quit", UIcenter, +h - w100th * 3)
+
 }
 
-// executes powerups
-function doPowerups(puPlayer, index) {
-    let gTimeout = 8000
-    let rTimeout = 5000
-    let powName = players[puPlayer].powerup.powerupArray[index]
-
-    // powerup starts
-    if (powName == "o_random") {
-        powName = achtung.powerups[Math.floor(Math.random() * achtung.powerups.length)]
-    }
-    if (powName == "g_slow") {
-        players[puPlayer].powerup.speed *= 0.5
-        players[puPlayer].powerup.toClear[index] = setTimeout(() => (players[puPlayer].powerup.speed *= 2), gTimeout)
-    }
-    if (powName == "g_fast") {
-        players[puPlayer].powerup.speed *= 2
-        players[puPlayer].powerup.toClear[index] = setTimeout(() => (players[puPlayer].powerup.speed *= 0.5), gTimeout)
-    }
-    if (powName == "g_thin") {
-        players[puPlayer].powerup.size *= 0.5
-        players[puPlayer].powerup.toClear[index] = setTimeout(() => (players[puPlayer].powerup.size *= 2), gTimeout)
-    }
-    if (powName == "g_robot") {
-        players[puPlayer].powerup.robot++
-        players[puPlayer].powerup.toClear[index] = setTimeout(() => players[puPlayer].powerup.robot--, gTimeout)
-    }
-    if (powName == "g_side") {
-        players[puPlayer].powerup.side++
-        players[puPlayer].powerup.toClear[index] = setTimeout(() => players[puPlayer].powerup.side--, gTimeout)
-    }
-    if (powName == "g_invisible") {
-        players[puPlayer].powerup.invisible++
-        players[puPlayer].powerup.toClear[index] = setTimeout(() => players[puPlayer].powerup.invisible--, gTimeout)
-    }
-    if (powName == "r_slow") {
-        for (const otherPlayers in players) {
-            if (otherPlayers != puPlayer) {
-                players[otherPlayers].powerup.speed *= 0.5
-                players[otherPlayers].powerup.toClear[index] = setTimeout(() => (players[otherPlayers].powerup.speed *= 2), rTimeout)
-            }
-        }
-    }
-    if (powName == "r_fast") {
-        for (const otherPlayers in players) {
-            if (otherPlayers != puPlayer) {
-                players[otherPlayers].powerup.speed *= 2
-                players[otherPlayers].powerup.toClear[index] = setTimeout(() => (players[otherPlayers].powerup.speed *= 0.5), rTimeout)
-            }
-        }
-    }
-    if (powName == "r_thick") {
-        for (const otherPlayers in players) {
-            if (otherPlayers != puPlayer) {
-                players[otherPlayers].powerup.size *= 2
-                players[otherPlayers].powerup.toClear[index] = setTimeout(() => (players[otherPlayers].powerup.size *= 0.5), rTimeout)
-            }
-        }
-    }
-    if (powName == "r_robot") {
-        for (const otherPlayers in players) {
-            if (otherPlayers != puPlayer) {
-                players[otherPlayers].powerup.robot++
-                players[otherPlayers].powerup.toClear[index] = setTimeout(() => players[otherPlayers].powerup.robot--, rTimeout)
-            }
-        }
-    }
-    if (powName == "r_reverse") {
-        for (const otherPlayers in players) {
-            if (otherPlayers != puPlayer) {
-                players[otherPlayers].powerup.reverse++
-                players[otherPlayers].powerup.toClear[index] = setTimeout(() => players[otherPlayers].powerup.reverse--, rTimeout)
-            }
-        }
-    }
-    if (powName == "b_clear") {
-        ctxTH.clearRect(0, 0, h, h)
-    }
-    if (powName == "b_more") {
-        setTimeout(powerupSpawner, 100)
-        setTimeout(powerupSpawner, 200)
-        setTimeout(powerupSpawner, 300)
-    }
-    if (powName == "b_sides") {
-        achtung.sides++
-        achtung.clearSides = setTimeout(() => achtung.sides--, gTimeout)
-    }
-}
-
-// updates the achtung object with data of a new powerup
-function powerupSpawner() {
-    if (achtung.powerupsOnScreen.length > 30) return
-    let newPow = Math.floor(Math.random() * achtung.powerups.length),
-        spawnX = Math.floor(Math.random() * h),
-        spawnY = Math.floor(Math.random() * h),
-        powup = achtung.powerups[newPow]
-    // powup = "r_reverse" //  apklsdjalskdjalksdjlaksjdlakfjlæanæoæiuanweifupnaweifunaewæfnakdnfkalsjdfnklajsdfnkaljdnfklajnsdfklajnsdfkajdsnfkajdsnflakjdnf
-
+function addPowup(view, viewIndex) {
     achtung.powerupsOnScreen[achtung.powerupsOnScreen.length] = {}
-    achtung.powerupsOnScreen[achtung.powerupsOnScreen.length - 1].pow = powup
-    achtung.powerupsOnScreen[achtung.powerupsOnScreen.length - 1].xPos = spawnX
-    achtung.powerupsOnScreen[achtung.powerupsOnScreen.length - 1].yPos = spawnY
-
-    // powerupIndex++
-
+    achtung.powerupsOnScreen[achtung.powerupsOnScreen.length - 1].pow = achtung.powerups[view.getUint8(viewIndex++)]
+    achtung.powerupsOnScreen[achtung.powerupsOnScreen.length - 1].xPos = view.getFloat64(viewIndex);viewIndex+=8
+    achtung.powerupsOnScreen[achtung.powerupsOnScreen.length - 1].yPos = view.getFloat64(viewIndex);viewIndex+=8
     powerupDraw()
 }
 
 // draws powerups to canvas
 function powerupDraw() {
     ctxPV.clearRect(0, 0, w, h)
-    ctxPH.clearRect(0, 0, w, h)
 
     for (let i = 0; i < achtung.powerupsOnScreen.length; i++) {
         if (achtung.powerupsOnScreen[i] == 0) continue
 
         let pow = achtung.powerupsOnScreen[i].pow,
-            spawnX = achtung.powerupsOnScreen[i].xPos,
-            spawnY = achtung.powerupsOnScreen[i].yPos
+            spawnX = achtung.powerupsOnScreen[i].xPos*h,
+            spawnY = achtung.powerupsOnScreen[i].yPos*h
 
-        // draw hitbox
-        ctxPH.fillStyle = `rgba(${i * 3 + 3}, ${i * 3 + 2}, ${i * 3 + 1}, 1)`
-        ctxPH.beginPath()
-        ctxPH.arc(spawnX, spawnY, iconSize, 0, r2d(360), false)
-        ctxPH.fill()
-
-        let greenGrad = ctxPV.createRadialGradient(0, 0, 0, 0, 0, iconSize)
+        let greenGrad = ctxPV.createRadialGradient(0, 0, 0, 0, 0, iconSizePx)
         greenGrad.addColorStop(0, green)
         greenGrad.addColorStop(1, greent)
-        let redGrad = ctxPV.createRadialGradient(0, 0, 0, 0, 0, iconSize)
+        let redGrad = ctxPV.createRadialGradient(0, 0, 0, 0, 0, iconSizePx)
         redGrad.addColorStop(0, red)
         redGrad.addColorStop(1, redt)
-        let blueGrad = ctxPV.createRadialGradient(0, 0, 0, 0, 0, iconSize)
+        let blueGrad = ctxPV.createRadialGradient(0, 0, 0, 0, 0, iconSizePx)
         blueGrad.addColorStop(0, blue)
         blueGrad.addColorStop(1, bluet)
 
@@ -762,7 +444,7 @@ function powerupDraw() {
 
         ctxPV.fillStyle = "#000000"
         ctxPV.beginPath()
-        ctxPV.arc(0, 0, iconSize, 0, r2d(360), false)
+        ctxPV.arc(0, 0, iconSizePx, 0, d2r(360), false)
         ctxPV.fill()
 
         if (pow.charAt(0) == "g") {
@@ -780,16 +462,16 @@ function powerupDraw() {
         if (pow.charAt(0) == "g" || pow.charAt(0) == "r" || pow.charAt(0) == "b") {
             // draw bg
             ctxPV.beginPath()
-            ctxPV.arc(0, 0, iconSize, 0, r2d(360), false)
+            ctxPV.arc(0, 0, iconSizePx, 0, d2r(360), false)
             ctxPV.stroke()
             ctxPV.beginPath()
-            ctxPV.arc(0, 0, iconSize, 0, r2d(360), false)
+            ctxPV.arc(0, 0, iconSizePx, 0, d2r(360), false)
             ctxPV.fill()
         } else {
             // draw random bg
             ctxPV.strokeStyle = blue
             ctxPV.beginPath()
-            ctxPV.arc(0, 0, iconSize, 0, r2d(360), false)
+            ctxPV.arc(0, 0, iconSizePx, 0, d2r(360), false)
             ctxPV.stroke()
 
             let line1 = [-65, -200]
@@ -798,27 +480,27 @@ function powerupDraw() {
             // draw blue section of bg
             ctxPV.beginPath()
             ctxPV.fillStyle = blueGrad
-            ctxPV.arc(0, 0, iconSize, r2d(line1[0]), r2d(line1[1]), true)
-            ctxPV.moveTo(Math.cos(r2d(line1[1])) * iconSize, Math.sin(r2d(line1[1])) * iconSize)
-            ctxPV.lineTo(Math.cos(r2d(line1[0])) * iconSize, Math.sin(r2d(line1[0])) * iconSize)
+            ctxPV.arc(0, 0, iconSizePx, d2r(line1[0]), d2r(line1[1]), true)
+            ctxPV.moveTo(Math.cos(d2r(line1[1])) * iconSizePx, Math.sin(d2r(line1[1])) * iconSizePx)
+            ctxPV.lineTo(Math.cos(d2r(line1[0])) * iconSizePx, Math.sin(d2r(line1[0])) * iconSizePx)
             ctxPV.fill()
 
             // draw red section of bg
             ctxPV.beginPath()
             ctxPV.fillStyle = redGrad
-            ctxPV.arc(0, 0, iconSize, r2d(line2[0]), r2d(line1[0]), true)
-            ctxPV.moveTo(Math.cos(r2d(line1[0])) * iconSize, Math.sin(r2d(line1[0])) * iconSize)
-            ctxPV.lineTo(Math.cos(r2d(line1[1])) * iconSize, Math.sin(r2d(line1[1])) * iconSize)
-            ctxPV.arc(0, 0, iconSize, r2d(line1[1]), r2d(line2[1]), true)
-            ctxPV.lineTo(Math.cos(r2d(line2[0])) * iconSize, Math.sin(r2d(line2[0])) * iconSize)
+            ctxPV.arc(0, 0, iconSizePx, d2r(line2[0]), d2r(line1[0]), true)
+            ctxPV.moveTo(Math.cos(d2r(line1[0])) * iconSizePx, Math.sin(d2r(line1[0])) * iconSizePx)
+            ctxPV.lineTo(Math.cos(d2r(line1[1])) * iconSizePx, Math.sin(d2r(line1[1])) * iconSizePx)
+            ctxPV.arc(0, 0, iconSizePx, d2r(line1[1]), d2r(line2[1]), true)
+            ctxPV.lineTo(Math.cos(d2r(line2[0])) * iconSizePx, Math.sin(d2r(line2[0])) * iconSizePx)
             ctxPV.fill()
 
             // draw green section of bg
             ctxPV.beginPath()
             ctxPV.fillStyle = greenGrad
-            ctxPV.arc(0, 0, iconSize, r2d(line2[1]), r2d(line2[0]), true)
-            ctxPV.moveTo(Math.cos(r2d(line2[0])) * iconSize, Math.sin(r2d(line2[0])) * iconSize)
-            ctxPV.lineTo(Math.cos(r2d(line2[1])) * iconSize, Math.sin(r2d(line2[1])) * iconSize)
+            ctxPV.arc(0, 0, iconSizePx, d2r(line2[1]), d2r(line2[0]), true)
+            ctxPV.moveTo(Math.cos(d2r(line2[0])) * iconSizePx, Math.sin(d2r(line2[0])) * iconSizePx)
+            ctxPV.lineTo(Math.cos(d2r(line2[1])) * iconSizePx, Math.sin(d2r(line2[1])) * iconSizePx)
             ctxPV.fill()
         }
 
@@ -826,21 +508,6 @@ function powerupDraw() {
         drawPowerupIcons(pow.slice(2))
 
         ctxPV.restore()
-    }
-}
-
-// calc random start direction
-function calcRandomStartDir() {
-    for (const player in players) {
-        players[player].dir = round100(Math.random() * Math.PI * 2)
-    }
-}
-
-// calc random start position x and y
-function calcRandomStartPos() {
-    for (const player in players) {
-        players[player].x = map(calcRandomInt(h), 0, h, borderWidth * 10, h - borderWidth * 10) // map to avoid instant death
-        players[player].y = map(calcRandomInt(h), 0, h, borderWidth * 10, h - borderWidth * 10) // map to avoid instant death
     }
 }
 
@@ -858,7 +525,7 @@ const mathSin = (n) => round100(Math.sin(n))
 const getAlphaIndexForCoord = (x, y, width) => y * (width * 4) + x * 4 + 3
 
 // returns radians from degree input
-const r2d = (deg) => ((Math.PI * 2) / 360) * deg
+const d2r = (deg) => Math.PI / 180 * deg
 
 // returns random int from 0 to n
 const calcRandomInt = (int) => Math.floor(Math.random() * int)
@@ -868,3 +535,29 @@ const map = (n, start1, stop1, start2, stop2) => ((n - start1) / (stop1 - start1
 
 newSize() //  calc initial values
 init() //  start init
+
+//websocket code
+let msgActions=[]
+msgActions[128]=drawPlayers
+msgActions[129]=updateScore
+msgActions[130]=clearTraces
+msgActions[131]=addPowup
+msgActions[132]=removePowup
+msgActions[133]=displayWinner
+msgActions[134]=init
+msgActions[135]=readyPlayersAndScore
+msgActions[136]=addPlayer
+msgActions[137]=removePlayer
+
+let ws=new WebSocket("ws://"+location.hostname+":80")
+ws.binaryType="arraybuffer"
+ws.addEventListener("message", function(event){
+  let view=new DataView(event.data)
+  if(view.byteLength<1)return
+  let action=msgActions[view.getUint8(0)]
+  if(action)action(view, 1) //execute action based on msg nr
+})
+
+ws.addEventListener("open", function(event){
+  ws.send(new Uint8Array([3]) ) // ask for ready players and score
+})
