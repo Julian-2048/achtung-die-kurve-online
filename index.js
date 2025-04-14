@@ -59,7 +59,7 @@ const webserver = express()
    res.sendFile(req.path, { root: __dirname })
  )
  .listen(80, () => console.log(`Listening on ${80}`))
-const { WebSocketServer } = require('ws')
+const { WebSocketServer, WebSocket } = require('ws')
 const wss = new WebSocketServer({ server: webserver })
 wss.on('connection', (ws, req) => {
  ws.binaryType="arraybuffer"
